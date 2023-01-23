@@ -1,0 +1,445 @@
+---
+title: "Statistical Learning Final Project"
+author: "Havva Nilsu Öz; Matteo Zandegiacomo Orsolina"
+date: "7/16/2022"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Importing Libraries
+
+First we import the necessary libraries for our project
+
+```{r library}
+library(fastDummies)
+library(corrplot)
+library(lattice)
+library(flexmix)
+library(tidyverse)
+library(caret)
+library(leaps)
+library(MASS)
+library(DAAG)
+library(olsrr)
+library(moments)
+library(forecast)
+```
+
+## 1 Introducing the Dataset
+
+Our dataset was related to life expectancy, with health factors for 193 countries. It has been downloaded from the Kaggle repository website, with data collected from the World Health Organization and the United Nations websites. It can be found publicly available on the following website: <https://www.kaggle.com/datasets/kumarajarshi/life-expectancy-who>
+
+
+```{r dataset}
+life <- read.csv("/Users/zande/Desktop/Data_Science/Second_semester/Statistical_Learning/Project/expectancy.csv")
+head(life)
+```
+```{r dimension}
+dim(life)
+```
+Our data has 2938 rows and 22 columns.
+
+```{r class}
+map(life,class)
+```
+There are 20 quantitative variable and 2 categorical variables. We change their names for the sake of simplicity.
+```{r}
+colnames(life)[1] <- "country"
+colnames(life)[2] <- "year"
+colnames(life)[3] <- "status"
+colnames(life)[4] <- "expectancy"
+colnames(life)[5] <- "adult_mort"
+colnames(life)[6] <- "infant_death"
+colnames(life)[7] <- "alcohol"
+colnames(life)[8] <- "perc_expend"
+colnames(life)[9] <- "hepatitis_b"
+colnames(life)[10] <- "measles"
+colnames(life)[11] <- "bmi"
+colnames(life)[12] <- "under5"
+colnames(life)[13] <- "polio"
+colnames(life)[14] <- "tot_expend"
+colnames(life)[15] <- "diphtheria"
+colnames(life)[16] <- "hiv"
+colnames(life)[17] <- "gdp"
+colnames(life)[18] <- "population"
+colnames(life)[19] <- "thin10_19"
+colnames(life)[20] <- "thin5_9"
+colnames(life)[21] <- "income"
+colnames(life)[22] <- "school"
+```
+
+
+
+## 2 Data Exploratory
+
+### 2.1 Missing Data
+We check how many missing values the dataset has
+```{r missing}
+colSums(is.na(life))
+sum(is.na(life))
+```
+
+
+There is a total of 2563 missing values. We will be analyzing them one by one.
+
+*Population*
+Since it is the parameters with the biggest amount of NA data, and since the missing data refers to all the considered year for various countries, we decided that instead of deleting the data for these countries, we should delete the parameter itself.
+```{r}
+df <- subset(life, select = -c(population))
+```
+
+*Expectancy*
+It is the parameter we want to be able to predict, and there were very few NA values, and in order not to delete them we decided to make an average of the values in the previous and the following year, since we considered that life expectancy is not a value that changes a lot from one year to the other.
+```{r}
+ix <- which(is.na(df$expectancy))
+df$expectancy[ix] <- (df$expectancy[ix -1] + df$expectancy[ix + 1]) / 2
+```
+
+*Year*
+It refers to the year in which the data was collected and from each country it goes from 2000 to 2015. Nothing to be done, since there were no missing data.
+
+*Alcohol*
+It is the amount of pure alcohol in liters which was assumed on average in the whole year by the inhabitants of that country. We had many missing values: all of the values regarding the country of South Sudan were unavailable and most of the countries did not have a value for the last two years of the analysis. We decided to delete all the rows regarding South Sudan and to give the other countries the same value as the previous available year, since we assumed such a value not to change too much from one year to the next.
+```{r}
+df <- subset(df, country != "South Sudan")
+ix <- which(is.na(df$alcohol))
+df$alcohol[ix] <- df$alcohol[ix + 1]
+df$alcohol[ix] <- df$alcohol[ix + 1]
+```
+
+*Adult mortality*
+It is the amount of people dying with an age between 15 and 60 for 1000 inhabitants in that country. For the missing values we considered the average between the value of the previous and the following year.
+```{r}
+ix <- which(is.na(df$adult_mort))
+df$adult_mort[ix] <- (df$adult_mort[ix -1] + df$adult_mort[ix + 1]) / 2
+```
+
+*Infant deaths*
+It is the amount of people dying with an age lower than 15 for 1000 inhabitants in that country.
+
+*BMI*
+It is the average of the Body Mass Index among the whole population of that country. We don't have any of the values for Sudan, so we delete all the rows regarding that country, and since there are also some missing values among other countries we just consider the mean between previous and following year.
+```{r}
+#BMI problems
+df <- subset(df, country != "Sudan")
+ix <- which(is.na(df$bmi))
+df$bmi[ix] <- (df$bmi[ix -1] + df$bmi[ix + 1]) / 2
+```
+
+*Total expenditure*
+It is the government expenditure on health as a percentage of the total government expenditure. We had some problems with a few countries, that were completely deleted, while for a few of other missing values, it was enough to replace the missing value with the value that country had in the immediate previous year (since the missing data were only in the last year of the data collection).
+```{r}
+df <- subset(df, country != "Democratic People's Republic of Korea" & country != "Somalia")
+df <- subset(df, country != "Iraq" | year > 2003)
+ix <- which(is.na(df$tot_expend))
+df$tot_expend[ix] <- df$tot_expend[ix + 1]
+```
+
+*Diphtheria*
+This parameter gives the percentage immunization to this illness among children of 1 year of age. We only have missing values in the first couple of years of data collection, so we replace the missing value with the first collected one, assuming this parameter does not change too quickly.
+```{r}
+ix <- which(is.na(df$diphtheria))
+df$diphtheria[ix] <- df$diphtheria[ix - 1]
+df$diphtheria[ix] <- df$diphtheria[ix - 1]
+```
+
+*GDP*
+The Gross Domestic Product per capita. We only had missing datas for a few countries and for various years in a row, even if not all of them. We deleted the rows were the GDP was unavailable, since it would have not been reliable anymore to use the same value for more than a few years in a row.
+```{r}
+df <- df[-c(which(is.na(df$gdp))),]
+```
+
+*Income*
+It is the Human Development Index in terms of income composition, which is a value between 0 and 1. As with the GDP, the missing values were always about a same countries for various year in a row, so we deleted such rows.
+```{r}
+df <- df[-c(which(is.na(df$income))),]
+```
+
+*Polio*
+It is the immunization coverage among children of 1 year of age. We had some missing values regarding the country of Montenegro (that we delete), while for the remaining ones we considered the mean between following and previous year.
+```{r}
+df <- subset(df, (country != "Montenegro" | year > 2005))
+ix <- which(is.na(df$polio))
+df$polio[ix] <- df$polio[ix - 1]
+df$polio[ix] <- df$polio[ix - 1]
+```
+
+*Hepatitis B*
+It is the immunization coverage among children of 1 year of age. It is a variable with many missing values, and there is no scheme among them, so we preferred to simply delete the rows were the values were missing.
+```{r}
+df <- df[-c(which(is.na(df$hepatitis_b))),]
+```
+
+*Percentage expenditure*
+It is the total expenditure of the government on health as a percentage of the GDP per capita. It does not have any missing value.
+
+*Deaths under 5*
+It is the amount of children with less than 5 years who dies for 1000 inhabitants.
+
+*HIV*
+Number of deaths caused by HIV in 1000 inhabitants.
+
+*Thinness 10-19 years old*
+The percentage of teenagers who are under weight. The missing values were eliminated in the previous passage as a consequence of other missing values.
+
+*Thinness 5-9 years old*
+The percentage of children between 5 and 9 years old who are under weight. As before, the missing values were already been deleted.
+
+*Schooling*
+Average number of years of schooling among the children. Again, the NA values were already deleted.
+
+
+*Status*
+It is a binary variable, whose value tells us whether a country is developed or still developing. Nothing to be done, since there were no missing data. Since we want to compute a regression, we prefer to create a dummy variable to represent the status. The new variable will have a value of 1 if the country is developed and a value of 0 if it is still developing. We delete the original status variable since not useful anymore, and also the other variable that was created, with opposite values of 0 and 1.
+```{r}
+df <- dummy_cols(df, select_columns = 'status')
+colnames(df)[22] <- "developed"
+colnames(df)[23] <- "developing"
+df <- subset(df, select = -c(status, developing))
+```
+
+*Country*
+The values are all properly specified, and we already used them in order to make it easier the cleaning process. But since we do not want to have a biased result, we will not considered the name of the country in our computations, so we delete the column.
+```{r}
+df <- subset(df, select = -c(country))
+```
+
+
+### 2.2 Histograms
+In order to understand if our data can be used for a linear regression, we have to check the assumption of normality. In order to do so, we check the histograms of each one of our variables and we compute the skewness of each of them. If the skewness obtained is outside the interval [-1,1], then we have to apply some transformation, in order to obtain a less skewed distribution.
+
+*No transforms*
+Some parameters did not need any transformation since they were already not skewed. No further discussion is required about them.
+```{r}
+hist(df$expectancy, main = "Histogram for Life Expectancy", xlab = "Life Expectancy", ylab = "Count", col = "cornflowerblue")
+skewness(df$expectancy)
+```
+```{r}
+hist(df$year, main = "Histogram for Year", xlab = "Year", ylab = "Count", col = "cornflowerblue")
+skewness(df$year)
+```
+```{r}
+hist(df$alcohol, main = "Histogram for Alcohol", xlab = "Alcohol", ylab = "Count", col = "cornflowerblue")
+skewness(df$alcohol)
+```
+```{r}
+hist(df$bmi, main = "Histogram for BMI", xlab = "BMI", ylab = "Count", col = "cornflowerblue")
+skewness(df$bmi)
+```
+```{r}
+hist(df$tot_expend, main = "Histogram for Total Expenditure", xlab = "Total Expenditure", ylab = "Count", col = "cornflowerblue")
+skewness(df$tot_expend)
+```
+```{r}
+hist(df$school, main = "Histogram for Schooling", xlab = "Schooling", ylab = "Count", col = "cornflowerblue")
+skewness(df$school)
+```
+
+*Logarithm transform*
+The transformation we used more often was the logarithm. Using that we were able to solve most of our problems regarding skewness.
+```{r}
+hist(df$infant_death, main = "Histogram for Infant Deaths", xlab = "Infant Deaths", ylab = "Count", col = "cornflowerblue")
+skewness(df$infant_death)
+df$infant_death <- log1p(df$infant_death)
+colnames(df)[4] <- "log_infant_death"
+skewness(df$log_infant_death)
+hist(df$log_infant_death, main = "Histogram for Infant Deaths", xlab = "log(Infant Deaths)", ylab = "Count", col = "cornflowerblue")
+```
+```{r}
+hist(df$perc_expend, main = "Histogram for Percentage Expenditure", xlab = "Percentage Expenditure", ylab = "Count", col = "cornflowerblue")
+skewness(df$perc_expend)
+df$perc_expend <- log1p(df$perc_expend)
+colnames(df)[6] <- "log_perc_expend"
+skewness(df$log_perc_expend)
+hist(df$log_perc_expend, main = "Histogram for Percentage Expenditure", xlab = "log(Percentage Expenditure)", ylab = "Count", col = "cornflowerblue")
+```
+```{r}
+hist(df$measles, main = "Histogram for Measles", xlab = "Measles", ylab = "Count", col = "cornflowerblue")
+skewness(df$measles)
+df$measles <- log1p(df$measles)
+colnames(df)[8] <- "log_measles"
+skewness(df$log_measles)
+hist(df$log_measles, main = "Histogram for Measles", xlab = "log(Measles)", ylab = "Count", col = "cornflowerblue")
+```
+```{r}
+hist(df$under5, main = "Histogram for Under 5 Deaths", xlab = "Under 5 Deaths", ylab = "Count", col = "cornflowerblue")
+skewness(df$under5)
+df$under5 <- log1p(df$under5)
+colnames(df)[10] <- "log_under5"
+skewness(df$log_under5)
+hist(df$log_under5, main = "Histogram for Under 5 Deaths", xlab = "log(Under 5 Deaths)", ylab = "Count", col = "cornflowerblue")
+```
+```{r}
+hist(df$gdp, main="Histogram for GDP", xlab = "GDP", ylab = "Count", col = "cornflowerblue")
+skewness(df$gdp)
+df$gdp <- log1p(df$gdp)
+colnames(df)[15] <- "log_gdp"
+skewness(df$log_gdp)
+hist(df$log_gdp, main = "Histogram for GDP", xlab = "log(GDP)", ylab = "Count", col = "cornflowerblue")
+```
+```{r}
+hist(df$thin10_19, main = "Histogram for Thinness 10-19 Years", xlab = "Thinness 10-19 Years", ylab = "Count", col = "cornflowerblue")
+skewness(df$thin10_19)
+df$thin10_19 <- log1p(df$thin10_19)
+colnames(df)[16] <- "log_thin10_19"
+skewness(df$log_thin10_19)
+hist(df$log_thin10_19, main = "Histogram for Thinness 10-19 Years", xlab = "log(Thinness 10-19 Years)", ylab = "Count", col = "cornflowerblue")
+```
+```{r}
+hist(df$thin5_9, main="Histogram for Thinness 5-9 Years", 
+     xlab="Thinness 5-9 Years", ylab = "Count", col="cornflowerblue")
+skewness(df$thin5_9)
+df$thin5_9 <- log1p(df$thin5_9)
+colnames(df)[17] <- "log_thin5_9"
+skewness(df$log_thin5_9)
+hist(df$log_thin5_9, main = "Histogram for Thinness 5-9 Years", xlab = "log(Thinness 5-9 Years)", ylab = "Count", col = "cornflowerblue")
+```
+
+In all the other cases we almost always used different transformations, we are just going to show them
+
+*Square root transform*
+```{r}
+hist(df$adult_mort, main = "Histogram for Adult Mortality", xlab = "Adult Mortality", ylab = "Count", col = "cornflowerblue")
+skewness(df$adult_mort)
+df$adult_mort <- sqrt(df$adult_mort)
+colnames(df)[3] <- "sqrt_adult_mort"
+skewness(df$sqrt_adult_mort)
+hist(df$sqrt_adult_mort, main = "Histogram for Adult Mortality", xlab = "sqrt(Adult Mortality)", ylab = "Count", col = "cornflowerblue")
+```
+
+*Cube transform*
+```{r}
+hist(df$hepatitis_b, main = "Histogram for Hepatitis B", xlab = "Hepatitis B", ylab = "Count", col = "cornflowerblue")
+skewness(df$hepatitis_b)
+df$hepatitis_b <- df$hepatitis_b^3
+colnames(df)[7] <- "cube_hepatitis_b"
+skewness(df$cube_hepatitis_b)
+hist(df$cube_hepatitis_b, main = "Histogram for Hepatitis B", xlab = "(Hepatitis B)^3", ylab = "Count", col = "cornflowerblue")
+```
+
+*Power 4 transform*
+```{r}
+hist(df$polio, main="Histogram for Polio", xlab = "Polio", ylab = "Count", col = "cornflowerblue")
+skewness(df$polio)
+df$polio <- df$polio^4
+colnames(df)[11] <- "pwr4_polio"
+skewness(df$pwr4_polio)
+hist(df$pwr4_polio, main = "Histogram for Polio", xlab = "(Polio)^4", ylab = "Count", col = "cornflowerblue")
+```
+```{r}
+hist(df$diphtheria, main = "Histogram for Diphtheria", xlab = "Diphtheria", ylab = "Count", col = "cornflowerblue")
+skewness(df$diphtheria)
+df$diphtheria <- df$diphtheria^4
+colnames(df)[13] <- "pwr4_diphtheria"
+skewness(df$pwr4_diphtheria)
+hist(df$pwr4_diphtheria, main = "Histogram for Diphtheria", xlab = "(Diphtheria)^4", ylab = "Count", col = "cornflowerblue")
+```
+
+*Reciprocal transform*
+```{r}
+hist(df$hiv, main = "Histogram for HIV", xlab = "HIV", ylab = "Count", col = "cornflowerblue")
+skewness(df$hiv)
+df$hiv <- 1/df$hiv
+colnames(df)[14] <- "recipr_hiv"
+skewness(df$recipr_hiv)
+hist(df$recipr_hiv, main = "Histogram for HIV", xlab = "1/HIV", ylab = "Count", col = "cornflowerblue")
+```
+
+*Square transform*
+```{r}
+hist(df$income, main = "Histogram for ICOF", xlab = "Income Composition Of Resources", ylab = "Count", col = "cornflowerblue")
+skewness(df$income)
+df$income <- df$income^2
+colnames(df)[18] <- "sqr_income"
+skewness(df$sqr_income)
+hist(df$sqr_income, main = "Histogram for ICOF", xlab = "(Income Composition Of Resources)^2", ylab = "Count", col = "cornflowerblue")
+```
+
+
+### 2.3 Boxplots
+In order to better understand the behavior of some of the parameters, we try to use some boxplots. In particular, we do so with the status of countries and the year, in order to notice some improvement along the years and a definitely better expectancy for developed countries.
+```{r}
+boxplot(df$expectancy ~ df$year, col="orange", border="brown")
+boxplot(df$expectancy ~ df$developed, col = "orange", border = "brown")
+```
+
+## 3 Modeling
+
+First thing to do is to split our set of samples into two subsets: a training one and a testing one. We choose to consider as a test set the values obtained in the last year of the data collection, i.e. 2015.
+```{r}
+df.test <- subset(df, year == 2015)
+df.train <- subset(df, year != 2015)
+```
+
+
+### 3.1 Correlations
+In order to properly check whether we have some correlation between the expectancy and the other parameters, we build a correlation matrix.
+```{r}
+corrmat <- cor(df)
+corrplot(corrmat, type = "upper", method = 'circle', tl.col = 'black', cl.ratio = 0.2, col = COL2('PuOr', 10))
+```
+
+### 3.2 Linear regressions
+
+Checking the correlation matrix, we see that some of the parameters have a very strong correlation (or anti-correlation) with the expectancy. We try to find a linear regression that could explain this result.
+```{r}
+plot(df.train$sqrt_adult_mort, df.train$expectancy, xlab = "sqrt(Adult Mortality)", ylab = "Expectancy")
+abline(lm(expectancy ~ sqrt_adult_mort, data = df.train), col = 'red')
+```
+```{r}
+plot(df.train$log_under5, df.train$expectancy, xlab = "log(Under 5 Deaths)", ylab = "Expectancy")
+abline(lm(expectancy ~ log_under5, data = df.train), col = 'red')
+```
+```{r}
+plot(df.train$recipr_hiv, df.train$expectancy, xlab = "1 / HIV", ylab = "Expectancy")
+abline(lm(expectancy ~ recipr_hiv, data = df.train), col = 'red')
+```
+```{r}
+plot(df.train$sqr_income, df.train$expectancy, xlab = "(Income)^2", ylab = "Expectancy")
+abline(lm(expectancy ~ sqr_income, data = df.train), col = 'red')
+```
+```{r}
+plot(df.train$school, df.train$expectancy, xlab = "Schooling", ylab = "Expectancy")
+abline(lm(expectancy ~ school, data = df.train), col = 'red')
+```
+
+### 3.3 Multiple regression
+We compute the multiple regression, taking into account all the parameters we have. We apply a backward propagation using a function with a stopping condition given by a threshold of the p-value of our hypothesis test.
+```{r}
+model <- lm(expectancy ~ ., data = df.train)
+summary(model)$adj.r.squared
+summary(model)$coeff
+```
+```{r}
+model_back1 <- ols_step_backward_p(model, prem = 0.05, progress = TRUE, details = TRUE)
+model_back1$adjr
+model_back1$rmse
+model_back1$model$coefficients
+plot(model_back1)
+```
+We create a new model, in order for it to stop at the right step, according to what we noticed to be the best R^2
+```{r}
+model_back <- ols_step_backward_p(model, prem = 0.1, progress = TRUE, details = FALSE)
+model_back$adjr
+model_back$rmse
+model_back$model$coefficients
+plot(model_back)
+```
+
+### 3.4 Prediction
+Next we try to predict what may happen in the last year which we left out from the training set, in order to see whether the model properly works. 
+```{r}
+pred <- predict(model_back$model, df.test, se.fit = TRUE)
+rmse <- accuracy(pred$fit, df.test$expectancy)[2]
+rmse
+resid <- df.test$expectancy - pred$fit
+plot(resid)
+abline(h = 0, col = "red")
+```
+
+
